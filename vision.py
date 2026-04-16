@@ -31,16 +31,30 @@ def _get_client() -> Anthropic:
 
 ANALYSIS_PROMPT = """Tu analyses un packshot de lunettes sur fond blanc pour un opticien français.
 
+FORMES DISPONIBLES — choisis UNE seule valeur parmi cette liste exacte, en te basant sur les standards optiques :
+- Ronde : monture parfaitement circulaire ou quasi-circulaire, hauteur ≈ largeur
+- Ovale : ellipse douce, plus large que haute, bords arrondis sans angles
+- Rectangulaire : forme droite, nettement plus large que haute, angles nets ou légèrement arrondis
+- Pantos : bas arrondi, haut plat ou légèrement droit (forme en "D" inversé), style vintage
+- Papillon : monture évasée vers le haut et l'extérieur (cat-eye), coins supérieurs relevés
+- Aviateur : forme goutte d'eau, plus grande en bas qu'en haut, style pilote
+- Hexagonale : six côtés géométriques visibles
+- Masque : verre bouclier unique couvrant les deux yeux, style sport/shield
+- Oversize : monture extrêmement grande dépassant largement le visage (nettement plus grande que la norme)
+- Large : monture généreuse, sensiblement plus large que la moyenne sans être oversize
+
+RÈGLE couleur : n'utilise JAMAIS le mot "Havane". Utilise "Écaille" ou "Écaille Havane" selon la nuance.
+
 Retourne UNIQUEMENT un JSON valide avec ces clés (pas de markdown, pas d'explication) :
 {
-  "forme": "ovale | ronde | carrée | rectangulaire | papillon | aviateur | hexagonale | pantos | autre",
-  "couleur_motif": "description courte, ex: écaille brune, noir mat, transparent cristal, métal doré, bicolore noir/or",
+  "forme": "une valeur parmi : Ronde | Ovale | Rectangulaire | Pantos | Papillon | Aviateur | Hexagonale | Masque | Oversize | Large",
+  "couleur_motif": "ex: Écaille, Écaille Havane, noir mat, transparent cristal, métal doré, bicolore noir/or",
   "matiere_apparente": "acétate | métal | mixte acétate-métal | autre",
   "type_verres": "solaire | optique",
   "teinte_verres": "description si solaire (ex: dégradé brun, miroité bleu, fumé), sinon null",
   "genre_cible": "femme | homme | mixte",
-  "style": "2-4 mots, ex: tendance Miu-miu, rétro 70s, minimaliste, streetwear, classique intemporel, oversize",
-  "visages_adaptes": "liste de formes de visage qui conviennent, ex: ovale, rond, carré",
+  "style": "2-4 mots, ex: tendance Miu-miu, rétro 70s, minimaliste, streetwear, classique intemporel",
+  "visages_adaptes": "liste des formes de visage qui conviennent, ex: ovale, rond, carré",
   "details_notables": "1 phrase courte sur un détail visuel (ex: branches dorées fines, plaquettes métal, charnières apparentes)"
 }"""
 

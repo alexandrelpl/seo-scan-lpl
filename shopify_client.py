@@ -5,6 +5,12 @@ from typing import List, Dict, Optional
 
 API_VERSION = "2024-10"
 
+# ── Metafield "Filtre forme" ─────────────────────────────────────────────────
+# Vérifie dans Admin Shopify → Settings → Custom data → Products
+# et ajuste les deux valeurs ci-dessous si nécessaire.
+FORME_NAMESPACE = "front"
+FORME_KEY = "forme"
+
 
 def _base_url() -> str:
     shop = os.environ["SHOPIFY_SHOP"]
@@ -120,6 +126,50 @@ def update_product_full(
     if user_errors:
         raise ValueError(f"Shopify GraphQL errors: {user_errors}")
 
+    return data
+
+
+def update_product_forme(product_id: int, forme: str) -> Dict:
+    """
+    Met à jour UNIQUEMENT le metafield 'Filtre forme' via GraphQL.
+    Indépendant du push description/meta — peut être utilisé séparément.
+    """
+    shop = os.environ["SHOPIFY_SHOP"]
+    url = f"https://{shop}.myshopify.com/admin/api/{API_VERSION}/graphql.json"
+
+    mutation = """
+    mutation productUpdate($input: ProductInput!) {
+      productUpdate(input: $input) {
+        product { id title }
+        userErrors { field message }
+      }
+    }
+    """
+    variables = {
+        "input": {
+            "id": f"gid://shopify/Product/{product_id}",
+            "metafields": [
+                {
+                    "namespace": FORME_NAMESPACE,
+                    "key": FORME_KEY,
+                    "value": forme,
+                    "type": "single_line_text_field",
+                }
+            ],
+        }
+    }
+
+    r = requests.post(
+        url,
+        headers=_headers(),
+        json={"query": mutation, "variables": variables},
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()
+    user_errors = data.get("data", {}).get("productUpdate", {}).get("userErrors", [])
+    if user_errors:
+        raise ValueError(f"Shopify GraphQL errors: {user_errors}")
     return data
 
 

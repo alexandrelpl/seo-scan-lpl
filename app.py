@@ -10,7 +10,7 @@ load_dotenv()
 import streamlit as st
 import pandas as pd
 
-from shopify_client import fetch_all_products, update_product_description, update_product_full, product_public_url
+from shopify_client import fetch_all_products, update_product_description, update_product_full, update_product_forme, product_public_url
 from vision import analyze_image, pick_packshot
 from seo_generator import generate_description
 
@@ -52,6 +52,7 @@ with st.sidebar:
                         "current_html": p.get("body_html") or "",
                         "image_url": pick_packshot(p.get("images", [])),
                         "attrs": None,
+                        "forme": "",
                         "generated": None,
                         "edited": None,
                         "meta_title": None,
@@ -72,6 +73,12 @@ with st.sidebar:
         help="Affiche uniquement les produits dont la description Shopify actuelle est vide",
     )
 
+    filter_no_forme = st.checkbox(
+        "Sans filtre forme uniquement",
+        value=False,
+        help="Affiche uniquement les produits dont le champ 'Filtre forme' est vide dans l'état local",
+    )
+
     # Compteur rapide
     if state["products"]:
         n_no_desc = sum(1 for p in state["products"].values() if not p.get("current_html", "").strip())
@@ -87,10 +94,16 @@ if not state["products"]:
     st.stop()
 
 # ---------- Tableau récap ----------
+FORMES_VALIDES = ["Ronde", "Ovale", "Rectangulaire", "Pantos", "Papillon",
+                  "Aviateur", "Hexagonale", "Masque", "Oversize", "Large"]
+
+
 def product_matches_filters(p: dict) -> bool:
     if filter_status != "tous" and p["status"] != filter_status:
         return False
     if filter_no_desc and p.get("current_html", "").strip():
+        return False
+    if filter_no_forme and p.get("forme", "").strip():
         return False
     return True
 
@@ -130,6 +143,8 @@ with col_a:
                 p["edited"] = result["description_html"]
                 p["meta_title"] = result["meta_title"]
                 p["meta_description"] = result["meta_description"]
+                if not p.get("forme") and attrs.get("forme"):
+                    p["forme"] = attrs["forme"]
                 p["status"] = "generated"
             except Exception as e:
                 st.warning(f"{p['title']} : {e}")
@@ -180,7 +195,7 @@ for pid, p in visible:
                 st.json(p["attrs"], expanded=False)
 
         with c2:
-            tab_desc, tab_meta = st.tabs(["📝 Description HTML", "🔍 Meta SEO"])
+            tab_desc, tab_meta, tab_forme = st.tabs(["📝 Description HTML", "🔍 Meta SEO", "🔺 Filtre Forme"])
 
             with tab_desc:
                 st.markdown("**Actuelle sur Shopify :**")
@@ -217,6 +232,26 @@ for pid, p in visible:
                 chars_desc = len(meta_desc)
                 st.caption(f"{chars_desc} car. {'✅' if 140 <= chars_desc <= 160 else '⚠️ hors cible'}")
 
+            with tab_forme:
+                st.markdown("**Forme détectée par le scan visuel :**")
+                forme_idx = FORMES_VALIDES.index(p.get("forme")) if p.get("forme") in FORMES_VALIDES else 0
+                forme_selectee = st.selectbox(
+                    "forme",
+                    options=FORMES_VALIDES,
+                    index=forme_idx,
+                    key=f"forme_{pid}",
+                    label_visibility="collapsed",
+                )
+                st.caption("⚠️ Vérifie visuellement que la forme correspond avant de pousser.")
+                if st.button("🔺 Push Forme uniquement", key=f"push_forme_{pid}"):
+                    try:
+                        update_product_forme(p["id"], forme_selectee)
+                        p["forme"] = forme_selectee
+                        save_state(state)
+                        st.success(f"✅ Forme '{forme_selectee}' envoyée sur Shopify")
+                    except Exception as e:
+                        st.error(str(e))
+
             b1, b2, b3, b4 = st.columns(4)
             with b1:
                 if st.button("🔄 Régénérer", key=f"regen_{pid}"):
@@ -229,6 +264,8 @@ for pid, p in visible:
                             p["edited"] = result["description_html"]
                             p["meta_title"] = result["meta_title"]
                             p["meta_description"] = result["meta_description"]
+                            if not p.get("forme") and attrs.get("forme"):
+                                p["forme"] = attrs["forme"]
                             p["status"] = "generated"
                             save_state(state)
                             st.rerun()

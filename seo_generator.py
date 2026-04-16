@@ -54,6 +54,7 @@ Meta description : Protégez vos yeux avec style grâce à la Annie.J Écaille. 
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 PROMPT_SOLAIRE = """Tu rédiges le contenu SEO d'une fiche produit pour lepetitlunetier.com — type : Lunettes Solaires.
+IMPORTANT couleur : n'utilise JAMAIS le mot "Havane" seul. Remplace toujours par "Écaille" ou "Écaille Havane".
 
 RÈGLES STRICTES :
 - Respecte EXACTEMENT la structure HTML du modèle (h2, h3, p, ul/li, strong, a).
@@ -82,6 +83,7 @@ Produit à décrire :
 """
 
 PROMPT_OPTIQUE = """Tu rédiges le contenu SEO d'une fiche produit pour lepetitlunetier.com — type : Monture Optique.
+IMPORTANT couleur : n'utilise JAMAIS le mot "Havane" seul. Remplace toujours par "Écaille" ou "Écaille Havane".
 
 RÈGLES STRICTES :
 - Respecte EXACTEMENT la structure HTML du modèle (h2, h3, p, ul/li, strong, a).
