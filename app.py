@@ -2,7 +2,9 @@
 import os
 import json
 import time
+import traceback
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -122,68 +124,138 @@ for pid, p in state["products"].items():
 st.subheader(f"Produits ({len(rows)})")
 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+# ── Fonction worker (thread-safe) ────────────────────────────────────────────
+def _process_one(pid: str, p: dict) -> tuple:
+    """Analyse image + génère description. Exécuté en parallèle."""
+    try:
+        attrs = analyze_image(p["image_url"])
+        result = generate_description(p["title"], attrs, p.get("product_type", ""))
+        return pid, {
+            "attrs": attrs,
+            "generated": result["description_html"],
+            "edited": result["description_html"],
+            "meta_title": result["meta_title"],
+            "meta_description": result["meta_description"],
+            "forme": attrs.get("forme", "") if not p.get("forme") else p["forme"],
+            "status": "generated",
+            "error": None,
+        }
+    except Exception as e:
+        return pid, {"error": str(e), "status": "pending"}
+
+
 # ---------- Actions bulk ----------
-col_a, col_b, col_c = st.columns(3)
+MAX_WORKERS = 5  # requêtes Claude en parallèle
+
+st.markdown("### Actions bulk")
+col_a, col_b, col_c, col_d = st.columns(4)
+
 with col_a:
-    if st.button("🔍 Analyser + générer pour TOUS les 'pending'", use_container_width=True):
+    if st.button("🔍 Analyser + générer (pending)", use_container_width=True):
         pending = [
             pid for pid, p in state["products"].items()
             if p["status"] == "pending"
             and p["image_url"]
             and (not filter_no_desc or not p.get("current_html", "").strip())
+            and (not filter_no_forme or not p.get("forme", "").strip())
         ]
-        progress = st.progress(0.0)
-        for i, pid in enumerate(pending):
-            p = state["products"][pid]
-            try:
-                attrs = analyze_image(p["image_url"])
-                result = generate_description(p["title"], attrs, p.get("product_type", ""))
-                p["attrs"] = attrs
-                p["generated"] = result["description_html"]
-                p["edited"] = result["description_html"]
-                p["meta_title"] = result["meta_title"]
-                p["meta_description"] = result["meta_description"]
-                if not p.get("forme") and attrs.get("forme"):
-                    p["forme"] = attrs["forme"]
-                p["status"] = "generated"
-            except Exception as e:
-                st.warning(f"{p['title']} : {e}")
-            save_state(state)
-            progress.progress((i + 1) / max(len(pending), 1))
-            time.sleep(0.2)  # soft rate-limit
-        st.success("Analyse + génération terminées.")
-        st.rerun()
+        if not pending:
+            st.info("Aucun produit pending à traiter.")
+        else:
+            progress = st.progress(0.0)
+            status_txt = st.empty()
+            errors = []
+            done = 0
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+                futures = {ex.submit(_process_one, pid, state["products"][pid]): pid
+                           for pid in pending}
+                for future in as_completed(futures):
+                    pid, res = future.result()
+                    done += 1
+                    if res.get("error"):
+                        errors.append(f"{state['products'][pid]['title']} : {res['error']}")
+                    else:
+                        state["products"][pid].update(
+                            {k: v for k, v in res.items() if k != "error"}
+                        )
+                    save_state(state)
+                    progress.progress(done / len(pending))
+                    status_txt.caption(f"{done}/{len(pending)} traités…")
+            if errors:
+                st.warning("Erreurs : " + " | ".join(errors))
+            st.success(f"✅ {done - len(errors)}/{len(pending)} générés.")
+            st.rerun()
 
 with col_b:
-    if st.button("✅ Pousser vers Shopify tous les 'validated'", use_container_width=True):
+    n_validated = sum(1 for p in state["products"].values() if p["status"] == "validated")
+    if st.button(f"📤 Push descriptions + SEO ({n_validated} validés)", use_container_width=True):
         to_push = [pid for pid, p in state["products"].items() if p["status"] == "validated"]
-        for pid in to_push:
+        progress = st.progress(0.0)
+        errors = []
+        for i, pid in enumerate(to_push):
             p = state["products"][pid]
             try:
-                update_product_full(
-                    p["id"],
-                    p["edited"],
-                    p.get("meta_title") or "",
-                    p.get("meta_description") or "",
-                )
+                update_product_full(p["id"], p["edited"],
+                                    p.get("meta_title") or "",
+                                    p.get("meta_description") or "")
                 p["status"] = "pushed"
             except Exception as e:
-                st.warning(f"{p['title']} : {e}")
+                errors.append(f"{p['title']} : {e}")
             save_state(state)
-        st.success(f"{len(to_push)} produits mis à jour sur Shopify.")
+            progress.progress((i + 1) / max(len(to_push), 1))
+        if errors:
+            st.warning("Erreurs : " + " | ".join(errors))
+        st.success(f"✅ {len(to_push) - len(errors)} descriptions/SEO mis à jour.")
         st.rerun()
 
 with col_c:
-    if st.button("🗑️ Réinitialiser l'état local", use_container_width=True):
+    n_avec_forme = sum(1 for p in state["products"].values() if p.get("forme"))
+    if st.button(f"🔺 Push formes ({n_avec_forme} renseignées)", use_container_width=True):
+        to_push_forme = [pid for pid, p in state["products"].items() if p.get("forme")]
+        progress = st.progress(0.0)
+        errors = []
+        for i, pid in enumerate(to_push_forme):
+            p = state["products"][pid]
+            try:
+                update_product_forme(p["id"], p["forme"])
+            except Exception as e:
+                errors.append(f"{p['title']} : {e}")
+            progress.progress((i + 1) / max(len(to_push_forme), 1))
+        if errors:
+            st.warning("Erreurs : " + " | ".join(errors))
+        st.success(f"✅ {len(to_push_forme) - len(errors)} formes mises à jour.")
+
+with col_d:
+    if st.button("🗑️ Réinitialiser l'état", use_container_width=True):
         state = {"products": {}}
         save_state(state)
         st.rerun()
 
 st.divider()
 
-# ---------- Édition produit par produit ----------
-visible = [(pid, p) for pid, p in state["products"].items() if product_matches_filters(p)]
+# ---------- Pagination ----------
+PAGE_SIZE = 20
+visible_all = [(pid, p) for pid, p in state["products"].items() if product_matches_filters(p)]
+n_pages = max(1, (len(visible_all) + PAGE_SIZE - 1) // PAGE_SIZE)
 
+if "page" not in st.session_state:
+    st.session_state.page = 0
+st.session_state.page = min(st.session_state.page, n_pages - 1)
+
+pc1, pc2, pc3 = st.columns([1, 3, 1])
+with pc1:
+    if st.button("◀ Précédent") and st.session_state.page > 0:
+        st.session_state.page -= 1
+with pc2:
+    st.caption(f"Page {st.session_state.page + 1} / {n_pages}  —  {len(visible_all)} produits filtrés")
+with pc3:
+    if st.button("Suivant ▶") and st.session_state.page < n_pages - 1:
+        st.session_state.page += 1
+
+start = st.session_state.page * PAGE_SIZE
+visible = visible_all[start: start + PAGE_SIZE]
+
+# ---------- Édition produit par produit ----------
 for pid, p in visible:
     with st.expander(f"{p['title']} — [{p['status']}]"):
         c1, c2 = st.columns([1, 2])
