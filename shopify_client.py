@@ -57,12 +57,70 @@ def fetch_all_products() -> List[Dict]:
 
 
 def update_product_description(product_id: int, new_html: str) -> Dict:
-    """Met à jour la description (body_html) d'un produit."""
+    """Met à jour uniquement la description (body_html) via REST — fallback."""
     url = f"{_base_url()}/products/{product_id}.json"
     payload = {"product": {"id": product_id, "body_html": new_html}}
     r = requests.put(url, headers=_headers(), json=payload, timeout=30)
     r.raise_for_status()
     return r.json()["product"]
+
+
+def update_product_full(
+    product_id: int,
+    description_html: str,
+    meta_title: str,
+    meta_description: str,
+) -> Dict:
+    """
+    Met à jour description HTML + meta title + meta description
+    en une seule requête GraphQL productUpdate.
+    """
+    shop = os.environ["SHOPIFY_SHOP"]
+    url = f"https://{shop}.myshopify.com/admin/api/{API_VERSION}/graphql.json"
+
+    mutation = """
+    mutation productUpdate($input: ProductInput!) {
+      productUpdate(input: $input) {
+        product { id title }
+        userErrors { field message }
+      }
+    }
+    """
+    variables = {
+        "input": {
+            "id": f"gid://shopify/Product/{product_id}",
+            "descriptionHtml": description_html,
+            "metafields": [
+                {
+                    "namespace": "global",
+                    "key": "title_tag",
+                    "value": meta_title,
+                    "type": "single_line_text_field",
+                },
+                {
+                    "namespace": "global",
+                    "key": "description_tag",
+                    "value": meta_description,
+                    "type": "single_line_text_field",
+                },
+            ],
+        }
+    }
+
+    r = requests.post(
+        url,
+        headers=_headers(),
+        json={"query": mutation, "variables": variables},
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()
+
+    user_errors = data.get("data", {}).get("productUpdate", {}).get("userErrors", [])
+    if user_errors:
+        raise ValueError(f"Shopify GraphQL errors: {user_errors}")
+
+    return data
 
 
 def product_public_url(handle: str) -> str:

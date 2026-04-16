@@ -10,7 +10,7 @@ load_dotenv()
 import streamlit as st
 import pandas as pd
 
-from shopify_client import fetch_all_products, update_product_description, product_public_url
+from shopify_client import fetch_all_products, update_product_description, update_product_full, product_public_url
 from vision import analyze_image, pick_packshot
 from seo_generator import generate_description
 
@@ -48,12 +48,15 @@ with st.sidebar:
                         "id": p["id"],
                         "title": p["title"],
                         "handle": p["handle"],
+                        "product_type": p.get("product_type", ""),
                         "current_html": p.get("body_html") or "",
                         "image_url": pick_packshot(p.get("images", [])),
                         "attrs": None,
                         "generated": None,
                         "edited": None,
-                        "status": "pending",  # pending | generated | validated | pushed | skipped
+                        "meta_title": None,
+                        "meta_description": None,
+                        "status": "pending",
                     }
             save_state(state)
         st.success(f"{len(products)} produits chargés.")
@@ -121,10 +124,12 @@ with col_a:
             p = state["products"][pid]
             try:
                 attrs = analyze_image(p["image_url"])
-                desc = generate_description(p["title"], attrs)
+                result = generate_description(p["title"], attrs, p.get("product_type", ""))
                 p["attrs"] = attrs
-                p["generated"] = desc
-                p["edited"] = desc
+                p["generated"] = result["description_html"]
+                p["edited"] = result["description_html"]
+                p["meta_title"] = result["meta_title"]
+                p["meta_description"] = result["meta_description"]
                 p["status"] = "generated"
             except Exception as e:
                 st.warning(f"{p['title']} : {e}")
@@ -140,7 +145,12 @@ with col_b:
         for pid in to_push:
             p = state["products"][pid]
             try:
-                update_product_description(p["id"], p["edited"])
+                update_product_full(
+                    p["id"],
+                    p["edited"],
+                    p.get("meta_title") or "",
+                    p.get("meta_description") or "",
+                )
                 p["status"] = "pushed"
             except Exception as e:
                 st.warning(f"{p['title']} : {e}")
@@ -170,17 +180,42 @@ for pid, p in visible:
                 st.json(p["attrs"], expanded=False)
 
         with c2:
-            st.markdown("**Description actuelle Shopify :**")
-            st.text_area("current", p["current_html"], height=120, disabled=True, key=f"cur_{pid}", label_visibility="collapsed")
+            tab_desc, tab_meta = st.tabs(["📝 Description HTML", "🔍 Meta SEO"])
 
-            st.markdown("**Description générée (éditable) :**")
-            edited = st.text_area(
-                "edited",
-                p.get("edited") or p.get("generated") or "",
-                height=260,
-                key=f"edit_{pid}",
-                label_visibility="collapsed",
-            )
+            with tab_desc:
+                st.markdown("**Actuelle sur Shopify :**")
+                st.text_area("current", p["current_html"], height=100, disabled=True,
+                             key=f"cur_{pid}", label_visibility="collapsed")
+                st.markdown("**Générée (éditable) :**")
+                edited = st.text_area(
+                    "edited",
+                    p.get("edited") or p.get("generated") or "",
+                    height=280,
+                    key=f"edit_{pid}",
+                    label_visibility="collapsed",
+                )
+
+            with tab_meta:
+                st.markdown("**Meta title** (50-60 car.)")
+                meta_title = st.text_input(
+                    "meta_title",
+                    value=p.get("meta_title") or "",
+                    key=f"mt_{pid}",
+                    label_visibility="collapsed",
+                )
+                chars_title = len(meta_title)
+                st.caption(f"{chars_title} car. {'✅' if 50 <= chars_title <= 60 else '⚠️ hors cible'}")
+
+                st.markdown("**Meta description** (140-160 car.)")
+                meta_desc = st.text_area(
+                    "meta_description",
+                    value=p.get("meta_description") or "",
+                    height=100,
+                    key=f"md_{pid}",
+                    label_visibility="collapsed",
+                )
+                chars_desc = len(meta_desc)
+                st.caption(f"{chars_desc} car. {'✅' if 140 <= chars_desc <= 160 else '⚠️ hors cible'}")
 
             b1, b2, b3, b4 = st.columns(4)
             with b1:
@@ -188,10 +223,12 @@ for pid, p in visible:
                     with st.spinner("Analyse + génération…"):
                         try:
                             attrs = p["attrs"] or analyze_image(p["image_url"])
-                            desc = generate_description(p["title"], attrs)
+                            result = generate_description(p["title"], attrs, p.get("product_type", ""))
                             p["attrs"] = attrs
-                            p["generated"] = desc
-                            p["edited"] = desc
+                            p["generated"] = result["description_html"]
+                            p["edited"] = result["description_html"]
+                            p["meta_title"] = result["meta_title"]
+                            p["meta_description"] = result["meta_description"]
                             p["status"] = "generated"
                             save_state(state)
                             st.rerun()
@@ -202,24 +239,35 @@ for pid, p in visible:
                             st.error(f"Erreur : {e}")
                             st.code(traceback.format_exc())
             with b2:
-                if st.button("💾 Enregistrer modif", key=f"save_{pid}"):
+                if st.button("💾 Enregistrer", key=f"save_{pid}"):
                     p["edited"] = edited
+                    p["meta_title"] = meta_title
+                    p["meta_description"] = meta_desc
                     save_state(state)
-                    st.toast("Modif enregistrée")
+                    st.toast("Modifications enregistrées")
             with b3:
                 if st.button("✔️ Valider", key=f"val_{pid}"):
                     p["edited"] = edited
+                    p["meta_title"] = meta_title
+                    p["meta_description"] = meta_desc
                     p["status"] = "validated"
                     save_state(state)
                     st.rerun()
             with b4:
                 if st.button("🚀 Push Shopify", key=f"push_{pid}"):
                     try:
-                        update_product_description(p["id"], edited)
+                        update_product_full(
+                            p["id"],
+                            edited,
+                            meta_title,
+                            meta_desc,
+                        )
                         p["edited"] = edited
+                        p["meta_title"] = meta_title
+                        p["meta_description"] = meta_desc
                         p["status"] = "pushed"
                         save_state(state)
-                        st.success("Mis à jour sur Shopify")
+                        st.success("✅ Mis à jour sur Shopify")
                         st.rerun()
                     except Exception as e:
                         st.error(str(e))
