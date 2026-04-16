@@ -16,7 +16,7 @@ from shopify_client import fetch_all_products, update_product_description, updat
 from vision import analyze_image, pick_packshot
 from seo_generator import generate_description
 
-DATA_DIR = Path("data")
+DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 STATE_FILE = DATA_DIR / "state.json"
 
@@ -81,10 +81,23 @@ with st.sidebar:
         help="Affiche uniquement les produits dont le champ 'Filtre forme' est vide dans l'état local",
     )
 
-    # Compteur rapide
+    st.divider()
+    st.markdown("**Batch bulk**")
+    batch_size = st.number_input(
+        "Produits par batch",
+        min_value=5, max_value=100, value=30, step=5,
+        help="Nombre de produits analysés par clic. Reclique pour continuer.",
+    )
+
+    # Compteurs rapides
     if state["products"]:
         n_no_desc = sum(1 for p in state["products"].values() if not p.get("current_html", "").strip())
         st.caption(f"Sans description : **{n_no_desc}** / {len(state['products'])}")
+        n_pending   = sum(1 for p in state["products"].values() if p["status"] == "pending")
+        n_generated = sum(1 for p in state["products"].values() if p["status"] == "generated")
+        n_pushed    = sum(1 for p in state["products"].values() if p["status"] == "pushed")
+        st.caption(f"⏳ pending: **{n_pending}** | ✅ généré: **{n_generated}** | 🚀 pushé: **{n_pushed}**")
+        st.caption(f"📄 state: `{STATE_FILE}`")
 
     st.divider()
     st.caption(f"API key : {'✅' if os.getenv('ANTHROPIC_API_KEY') else '❌'}")
@@ -145,21 +158,23 @@ def _process_one(pid: str, p: dict) -> tuple:
 
 
 # ---------- Actions bulk ----------
-MAX_WORKERS = 5  # requêtes Claude en parallèle
+MAX_WORKERS = 3  # requêtes Claude en parallèle (stable, évite les rate limits)
 
 st.markdown("### Actions bulk")
 col_a, col_b, col_c, col_d = st.columns(4)
 
 with col_a:
-    if st.button("🔍 Analyser + générer (pending)", use_container_width=True):
-        pending = [
-            pid for pid, p in state["products"].items()
-            if p["status"] == "pending"
-            and p["image_url"]
-            and (not filter_no_desc or not p.get("current_html", "").strip())
-            and (not filter_no_forme or not p.get("forme", "").strip())
-        ]
-        if not pending:
+    all_pending = [
+        pid for pid, p in state["products"].items()
+        if p["status"] == "pending"
+        and p["image_url"]
+        and (not filter_no_desc or not p.get("current_html", "").strip())
+        and (not filter_no_forme or not p.get("forme", "").strip())
+    ]
+    n_remaining = len(all_pending)
+    if st.button(f"🔍 Analyser batch ({min(batch_size, n_remaining)}/{n_remaining} pending)", use_container_width=True):
+        batch = all_pending[:batch_size]
+        if not batch:
             st.info("Aucun produit pending à traiter.")
         else:
             progress = st.progress(0.0)
@@ -168,7 +183,7 @@ with col_a:
             done = 0
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
                 futures = {ex.submit(_process_one, pid, state["products"][pid]): pid
-                           for pid in pending}
+                           for pid in batch}
                 for future in as_completed(futures):
                     pid, res = future.result()
                     done += 1
@@ -179,11 +194,11 @@ with col_a:
                             {k: v for k, v in res.items() if k != "error"}
                         )
                     save_state(state)
-                    progress.progress(done / len(pending))
-                    status_txt.caption(f"{done}/{len(pending)} traités…")
+                    progress.progress(done / len(batch))
+                    status_txt.caption(f"{done}/{len(batch)} traités — {n_remaining - done} restants au total")
             if errors:
                 st.warning("Erreurs : " + " | ".join(errors))
-            st.success(f"✅ {done - len(errors)}/{len(pending)} générés.")
+            st.success(f"✅ Batch terminé : {done - len(errors)}/{len(batch)} générés. {n_remaining - len(batch)} encore en pending.")
             st.rerun()
 
 with col_b:
